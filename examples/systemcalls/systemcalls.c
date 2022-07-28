@@ -1,4 +1,8 @@
 #include "systemcalls.h"
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,6 +20,22 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+    int ret = system(cmd);
+    
+    /* If cmd is NULL, then a nonzero if a shell is available, or 0 if no shell */    
+    if (!cmd && ret == 0) {
+        return false;
+    }
+    
+    /* If a child process couldn't be created */
+    if (ret == -1) {
+        return false;
+    }
+    
+    /* if a child process is terminated successfully but the cmd execution failed */
+    if (WIFEXITED(ret) && WEXITSTATUS(ret) != 0) {
+        return false;
+    }
 
     return true;
 }
@@ -58,6 +78,32 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    pid_t cpid, w;
+    int status = 0;
+    
+    cpid = fork();
+    if (cpid == -1) { 
+	perror("fork");
+	exit(EXIT_FAILURE);
+    }	
+
+    /* Code executed by child */
+    if (cpid == 0) { 
+	printf("Child PID is %ld\n", (long) getpid());
+        execv(command[0], command);
+	exit(EXIT_FAILURE);
+    } 
+
+    w = waitpid(cpid, &status, WUNTRACED | WCONTINUED);
+    if (w == -1) {
+        perror("waitpid");
+	return false;
+    }
+    else if (WIFEXITED(status)) {
+	if (0 != WEXITSTATUS(status)) {
+	    return false;
+	}
+    }
 
     va_end(args);
 
@@ -92,6 +138,41 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+
+    int fd = open(outputfile, O_WRONLY | O_CREAT, 0644);
+    if (fd == -1) {
+        perror("Error");
+	return false;
+    }
+
+    pid_t cpid = fork();
+    if (cpid == -1) return false;
+    
+    if (cpid == 0) { /* Code executed by child */
+        if (dup2(fd, 1) < 0) {
+            perror("Error:");
+            return false;	    
+	}
+	close(fd);
+	execv(command[0], command);
+	exit(EXIT_FAILURE);
+    }
+    
+    /* Code executed by parent */
+    close(fd);
+
+    int status = 0;
+    pid_t w = waitpid(cpid, &status, WUNTRACED | WCONTINUED);
+    if (w == -1) {
+        perror("waitpid");
+	return false;
+    }
+    else if (WIFEXITED(status)) {
+	if (0 != WEXITSTATUS(status)) {
+	    return false;
+	}
+    }
+
 
     va_end(args);
 
